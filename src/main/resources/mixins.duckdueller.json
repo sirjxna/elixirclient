@@ -4,7 +4,15 @@
   "refmap": "mixins.duckdueller.refmap.json",
   "mixins": [
     "MixinModList",
-    "MixinEffectRenderer"
+    "MixinEffectRenderer",
+    "EntityVelocityMixin",
+    "NetworkManagerMixin"
   ],
+
+  "client": [
+    "EntityVelocityMixin",
+    "NetworkManagerMixin"
+  ],
+  "server": [],
   "verbose": true
 }
