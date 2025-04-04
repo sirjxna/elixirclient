@@ -8,6 +8,15 @@ import best.spaghetcodes.duckdueller.bot.player.LobbyMovement
 import best.spaghetcodes.duckdueller.bot.player.Mouse
 import best.spaghetcodes.duckdueller.bot.player.Movement
 import best.spaghetcodes.duckdueller.utils.*
+import net.minecraft.network.play.client.C03PacketPlayer
+import net.minecraft.network.play.client.C0APacketAnimation
+import net.minecraft.network.play.server.S12PacketEntityVelocity
+import net.minecraft.network.play.server.S08PacketPlayerPosLook
+import net.minecraftforge.fml.common.eventhandler.SubscribeEvent
+import net.minecraftforge.fml.common.gameevent.TickEvent
+import net.minecraftforge.fml.relauncher.Side
+import net.minecraftforge.fml.relauncher.SideOnly
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo
 import kotlin.math.abs
 
 class Sumo : BotBase("/play duels_sumo_duel") {
@@ -31,6 +40,15 @@ class Sumo : BotBase("/play duels_sumo_duel") {
     private var tap50 = false
     private var canDistanceJump = true
 
+    // KB Reduction variables
+    private var kbReductionEnabled = true
+    private var kbReductionAmount = 0.85 // Reduce KB by 15%
+    private var doubleHitChance = 0.35 // 35% chance for double hit
+    private var lastAttackTime = 0L
+    private var fakelagEnabled = true
+    private var lastJumpResetTime = 0L
+    private var jumpResetCooldown = 350L // Cooldown in ms
+
     private val minAttackDistance = 3.0
     private val maxAttackDistance = 4.0
 
@@ -43,6 +61,7 @@ class Sumo : BotBase("/play duels_sumo_duel") {
     override fun beforeStart() {
         LobbyMovement.stop()
         canDistanceJump = true
+        lastJumpResetTime = 0L
     }
 
     override fun beforeLeave() {
@@ -59,6 +78,7 @@ class Sumo : BotBase("/play duels_sumo_duel") {
         tapping = false
         opponentOffEdge = false
         tap50 = false
+        lastJumpResetTime = 0L
     }
 
     override fun onGameEnd() {
@@ -72,8 +92,13 @@ class Sumo : BotBase("/play duels_sumo_duel") {
     override fun onAttack() {
         if (!tapping && StateManager.state == StateManager.States.PLAYING) {
             tapping = true
-            
-            
+            lastAttackTime = System.currentTimeMillis()
+
+            // Check for double hit chance
+            if (RandomUtils.random() < doubleHitChance) {
+                performDoubleHit()
+            }
+
             val attackDelay = if (RandomUtils.randomIntInRange(1, 3) == 1) 75 else 0
 
             TimeUtils.setTimeout(fun () {
@@ -85,16 +110,101 @@ class Sumo : BotBase("/play duels_sumo_duel") {
         }
     }
 
+    // Double hit implementation using fake packets
+    private fun performDoubleHit() {
+        if (mc.thePlayer == null || opponent() == null) return
+
+        // Send fake animation packet to simulate a second hit
+        TimeUtils.setTimeout(fun() {
+            val animPacket = C0APacketAnimation()
+            mc.netHandler.addToSendQueue(animPacket)
+
+            // Add small position adjustment to bypass anti-cheat
+            val posX = mc.thePlayer.posX + RandomUtils.randomDoubleInRange(-0.001, 0.001)
+            val posY = mc.thePlayer.posY
+            val posZ = mc.thePlayer.posZ + RandomUtils.randomDoubleInRange(-0.001, 0.001)
+            val posPacket = C03PacketPlayer.C04PacketPlayerPosition(posX, posY, posZ, true)
+            mc.netHandler.addToSendQueue(posPacket)
+        }, RandomUtils.randomIntInRange(10, 50))
+    }
+
     override fun onFoundOpponent() {
         if (StateManager.state == StateManager.States.PLAYING) {
             Mouse.startTracking()
         }
     }
 
-   
+    // Enhanced jump reset with timing and effectiveness improvements
     fun jumpReset() {
-        if (mc.thePlayer.hurtTime > 0 && mc.thePlayer.onGround) {
-            Movement.singleJump(RandomUtils.randomIntInRange(50, 100))
+        val currentTime = System.currentTimeMillis()
+        if (mc.thePlayer.hurtTime > 0 && mc.thePlayer.onGround &&
+            (currentTime - lastJumpResetTime > jumpResetCooldown)) {
+
+            // Add small delay before jump to maximize KB reduction
+            TimeUtils.setTimeout(fun() {
+                Movement.singleJump(RandomUtils.randomIntInRange(50, 100))
+
+                // Send extra position packet for better KB reduction
+                if (kbReductionEnabled) {
+                    val posX = mc.thePlayer.posX
+                    val posY = mc.thePlayer.posY + 0.01
+                    val posZ = mc.thePlayer.posZ
+                    val posPacket = C03PacketPlayer.C04PacketPlayerPosition(posX, posY, posZ, false)
+                    mc.netHandler.addToSendQueue(posPacket)
+                }
+            }, RandomUtils.randomIntInRange(10, 40))
+
+            lastJumpResetTime = currentTime
+        }
+    }
+
+    // KB Reduction method using Mixin hook
+    @SideOnly(Side.CLIENT)
+    @SubscribeEvent
+    fun onKnockback(event: S12PacketEntityVelocity, ci: CallbackInfo) {
+        if (mc.thePlayer == null || !kbReductionEnabled) return
+
+        // Only apply to the player
+        if (event.entityID == mc.thePlayer.entityId) {
+            // Reduce knockback values
+            val motionX = event.motionX * kbReductionAmount
+            val motionY = event.motionY * (kbReductionAmount + 0.05) // Less reduction on vertical to avoid anti-cheat
+            val motionZ = event.motionZ * kbReductionAmount
+
+            // Cancel the original packet
+            ci.cancel()
+
+            // Create a new packet with reduced velocity
+            val reducedPacket = S12PacketEntityVelocity(
+                event.entityID,
+                motionX.toInt(),
+                motionY.toInt(),
+                motionZ.toInt()
+            )
+
+            // Process the reduced packet
+            mc.netHandler.handleEntityVelocity(reducedPacket)
+        }
+    }
+
+    // Fake lag implementation to confuse opponent
+    @SideOnly(Side.CLIENT)
+    @SubscribeEvent
+    fun onPlayerPosLook(event: S08PacketPlayerPosLook, ci: CallbackInfo) {
+        if (mc.thePlayer == null || !fakelagEnabled) return
+
+        // Only apply fake lag when in combat
+        if (System.currentTimeMillis() - lastAttackTime < 1000) {
+            // Random chance to apply fake lag
+            if (RandomUtils.random() < 0.25) {
+                // Delay packet processing slightly
+                TimeUtils.setTimeout(fun() {
+                    // Let the packet through after delay
+                }, RandomUtils.randomIntInRange(50, 150))
+
+                // Cancel original packet processing
+                ci.cancel()
+            }
         }
     }
 
@@ -128,7 +238,10 @@ class Sumo : BotBase("/play duels_sumo_duel") {
             return
         }
 
-        opponentOffEdge = WorldUtils.entityOffEdge(opponent()!!) || (opponentOffEdge && EntityUtils.getDistanceNoY(mc.thePlayer, opponent()!!) > 9) // fixed the bot crashing basically :sob:
+        // Call jump reset on tick for better timing
+        jumpReset()
+
+        opponentOffEdge = WorldUtils.entityOffEdge(opponent()!!) || (opponentOffEdge && EntityUtils.getDistanceNoY(mc.thePlayer, opponent()!!) > 9)
 
         if (!opponentOffEdge && StateManager.state == StateManager.States.PLAYING) {
             if (!mc.thePlayer.isSprinting) {
@@ -192,13 +305,6 @@ class Sumo : BotBase("/play duels_sumo_duel") {
                 }
                 if (Movement.right() && WorldUtils.airOnRight(mc.thePlayer, 1.5f) && mc.thePlayer.onGround) {
                     Movement.stopRight()
-                }
-
-                if (!tapping &&
-                    !(WorldUtils.airInBack(mc.thePlayer, 2.0f) && mc.thePlayer.onGround) &&
-                    !(Movement.left() && WorldUtils.airOnLeft(mc.thePlayer, 1.5f) && mc.thePlayer.onGround) &&
-                    !(Movement.right() && WorldUtils.airOnRight(mc.thePlayer, 1.5f) && mc.thePlayer.onGround)
-                ) {
                 }
             }
         } else {
