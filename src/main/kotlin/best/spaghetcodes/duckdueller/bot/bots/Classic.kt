@@ -15,6 +15,8 @@ import net.minecraft.util.Vec3
 
 class Classic : BotBase("/play duels_classic_duel"), Bow, Rod, MovePriority {
 
+    private var autoRequeueEnabled = true
+
     override fun getName(): String {
         return "Classic"
     }
@@ -42,11 +44,18 @@ class Classic : BotBase("/play duels_classic_duel"), Bow, Rod, MovePriority {
         shotsFired = 0
         Mouse.stopLeftAC()
         val i = TimeUtils.setInterval(Mouse::stopLeftAC, 100, 100)
+
+        // Delay and clean up actions
         TimeUtils.setTimeout(fun () {
             i?.cancel()
             Mouse.stopTracking()
             Movement.clearAll()
             Combat.stopRandomStrafe()
+
+            // If auto-requeue is enabled, we requeue
+            if (autoRequeueEnabled) {
+                sendCommandToChat("/play duels_classic_duel")
+            }
         }, RandomUtils.randomIntInRange(200, 400))
     }
 
@@ -208,4 +217,19 @@ class Classic : BotBase("/play duels_classic_duel"), Bow, Rod, MovePriority {
         }
     }
 
+    // Send a command through Minecraft's chat system
+    private fun sendCommandToChat(command: String) {
+        // Sends a command to the chat in Minecraft
+        mc.thePlayer.sendChatMessage(command)
+    }
+
+    // Allow toggling auto-requeue
+    fun toggleAutoRequeue(enabled: Boolean) {
+        autoRequeueEnabled = enabled
+        if (autoRequeueEnabled) {
+            ChatUtils.info("Auto-requeue enabled")
+        } else {
+            ChatUtils.info("Auto-requeue disabled")
+        }
+    }
 }
